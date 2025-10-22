@@ -1,0 +1,16 @@
+stages:
+  - test
+  - build
+
+test:
+  stage: test
+  script:
+    - pip install -r requirements.txt
+    - pytest src/tests/
+
+build:
+  stage: build
+  script:
+    - mkdir build && cd build
+    - cmake ..
+    - make

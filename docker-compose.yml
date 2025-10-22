@@ -1,0 +1,28 @@
+version: '3'
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    privileged: true  # Allows network configuration
+    devices:
+      - "/dev/net/tun:/dev/net/tun"  # For CAN interface
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - ENABLE_TRAFFIC=1
+      - ALLOWED_ORIGINS=http://localhost:3000
+    volumes:
+      - ./data:/app/data
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_BASE=http://localhost:8000
+    depends_on:
+      - backend
