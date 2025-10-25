@@ -10,6 +10,9 @@ from src.reporting.report_generator import generate_report
 from src.reporting.logger import Logger  # Assume logging integrated in scan
 from src.scanner.attacks.sniff import sniff_can_packets
 from src.scanner.attacks.inject import inject_can_packet
+from src.scanner.detection.engine import DetectionEngine
+import json as _json
+from typing import Any, Dict
 
 app = FastAPI()
 
@@ -22,28 +25,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Settings with simple persistence
+SETTINGS_PATH = os.getenv("SETTINGS_PATH", os.path.join("data", "settings.json"))
+
+def _ensure_dir(path: str):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+def load_settings() -> Dict[str, Any]:
+    try:
+        if os.path.exists(SETTINGS_PATH):
+            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+                return _json.load(f)
+    except Exception:
+        pass
+    return {"whitelist": ["0x123", "0x456"], "blacklist": ["0x7DF", "0x6F1"], "rate_threshold": 50}
+
+def save_settings(cfg: Dict[str, Any]):
+    _ensure_dir(SETTINGS_PATH)
+    with open(SETTINGS_PATH, "w", encoding="utf-8") as f:
+        _json.dump(cfg, f)
+
+SETTINGS = load_settings()
+
 class ScanRequest(BaseModel):
     interface: str = "vcan0"
     simulate: bool = False
 
+# On-demand scan (REST)
 @app.post("/api/scan")
 async def run_scan(request: ScanRequest):
-    if request.simulate:
-        # Produce deterministic synthetic results for demos/CI
-        now = int(time.time())
-        results = [
-            {"type": "sniff", "status": "detected", "packet": f"CAN(id=0x123, data=01020304, t={now})"},
-            {"type": "sniff", "status": "detected", "packet": f"CAN(id=0x456, data=11223344, t={now})"},
-            {"type": "inject", "status": "success", "details": "Injected test frame on vcan0"},
-        ]
-    else:
-        scanner = VulnerabilityScanner(request.interface)
-        results = scanner.run_scan()
-    logger = Logger()
-    for result in results:
-        logger.log_result(result["type"], result.get("status", "detected"), str(result))
-    logger.close()
-    return {"results": results}
+    try:
+        if request.simulate:
+            # Produce deterministic synthetic results for demos/CI
+            now = int(time.time())
+            results = [
+                {"type": "sniff", "status": "detected", "packet": f"CAN(id=0x123, data=01020304, t={now})"},
+                {"type": "sniff", "status": "detected", "packet": f"CAN(id=0x456, data=11223344, t={now})"},
+                {"type": "inject", "status": "success", "details": "Injected test frame on vcan0"},
+            ]
+        else:
+            scanner = VulnerabilityScanner(request.interface)
+            results = scanner.run_scan()
+
+        # Run detection
+        engine = DetectionEngine(SETTINGS)
+        findings = engine.analyze(results)
+
+        logger = Logger()
+        for result in results:
+            logger.log_result(result["type"], result.get("status", "detected"), str(result))
+        for f in findings:
+            logger.log_result("finding", f.get("severity", "alert"), str(f))
+        logger.close()
+        return {"results": results, "findings": findings}
+    except Exception as e:
+        err = {"type": "scan", "status": "failed", "error": str(e)}
+        return {"results": [err], "findings": []}
 
 @app.get("/api/report")
 async def get_report():
@@ -104,6 +141,7 @@ def _sse_event(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
+# Live scan (SSE)
 @app.get("/api/scan/stream")
 def stream_scan(interface: str = "vcan0", simulate: bool = False):
     logger = Logger()
@@ -111,6 +149,7 @@ def stream_scan(interface: str = "vcan0", simulate: bool = False):
     def event_gen():
         # Start event
         yield _sse_event({"event": "start", "payload": {"interface": interface, "simulate": simulate}})
+        collected = []
         try:
             if simulate:
                 now = int(time.time())
@@ -121,6 +160,7 @@ def stream_scan(interface: str = "vcan0", simulate: bool = False):
                 ]
                 for item in simulated:
                     logger.log_result(item["type"], item.get("status", "detected"), str(item))
+                    collected.append(item)
                     yield _sse_event({"event": "result", "payload": item})
                     time.sleep(0.3)
             else:
@@ -128,13 +168,21 @@ def stream_scan(interface: str = "vcan0", simulate: bool = False):
                 sniff_results = sniff_can_packets(interface)
                 for item in sniff_results:
                     logger.log_result(item["type"], item.get("status", "detected"), str(item))
+                    collected.append(item)
                     yield _sse_event({"event": "result", "payload": item})
                     time.sleep(0.05)
                 inject_results = inject_can_packet(interface)
                 for item in inject_results:
                     logger.log_result(item["type"], item.get("status", "detected"), str(item))
+                    collected.append(item)
                     yield _sse_event({"event": "result", "payload": item})
                     time.sleep(0.05)
+            # Run detection at the end and stream findings
+            engine = DetectionEngine(SETTINGS)
+            findings = engine.analyze(collected)
+            for f in findings:
+                logger.log_result("finding", f.get("severity", "alert"), str(f))
+                yield _sse_event({"event": "finding", "payload": f})
         except Exception as e:
             err = {"type": "scan", "status": "failed", "error": str(e)}
             logger.log_result("scan", "failed", str(err))
@@ -143,7 +191,8 @@ def stream_scan(interface: str = "vcan0", simulate: bool = False):
             logger.close()
             yield _sse_event({"event": "done"})
 
-    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive"}
+    origin = allowed_origins[0] if allowed_origins else "*"
+    headers = {"Cache-Control": "no-cache", "Connection": "keep-alive", "Access-Control-Allow-Origin": origin}
     return StreamingResponse(event_gen(), media_type="text/event-stream", headers=headers)
 
 
@@ -158,6 +207,7 @@ async def ws_scan(websocket: WebSocket):
     logger = Logger()
     try:
         await websocket.send_json({"event": "start", "payload": {"interface": interface, "simulate": simulate}})
+        collected = []
         if simulate:
             now = int(time.time())
             simulated = [
@@ -167,6 +217,7 @@ async def ws_scan(websocket: WebSocket):
             ]
             for item in simulated:
                 logger.log_result(item["type"], item.get("status", "detected"), str(item))
+                collected.append(item)
                 await websocket.send_json({"event": "result", "payload": item})
                 await asyncio_sleep(0.3)
         else:
@@ -174,14 +225,21 @@ async def ws_scan(websocket: WebSocket):
             sniff_results = sniff_can_packets(interface)
             for item in sniff_results:
                 logger.log_result(item["type"], item.get("status", "detected"), str(item))
+                collected.append(item)
                 await websocket.send_json({"event": "result", "payload": item})
                 await asyncio_sleep(0.05)
             # Then inject
             inject_results = inject_can_packet(interface)
             for item in inject_results:
                 logger.log_result(item["type"], item.get("status", "detected"), str(item))
+                collected.append(item)
                 await websocket.send_json({"event": "result", "payload": item})
                 await asyncio_sleep(0.05)
+        # After streaming results, send findings
+        engine = DetectionEngine(SETTINGS)
+        findings = engine.analyze(collected)
+        for f in findings:
+            await websocket.send_json({"event": "finding", "payload": f})
         await websocket.send_json({"event": "done"})
     except WebSocketDisconnect:
         pass
@@ -254,8 +312,39 @@ async def index():
           <li><code>GET</code> <a href="/api/report">/api/report</a></li>
           <li><code>GET</code> <a href="/api/results">/api/results</a></li>
           <li><code>DELETE</code> <a href="/api/results">/api/results</a></li>
+          <li><code>GET</code> <a href="/api/settings">/api/settings</a></li>
+          <li><code>PUT</code> <a href="/api/settings">/api/settings</a></li>
         </ul>
         <p class='muted'>Frontend runs at <code>http://localhost:3000</code>.</p>
       </body>
     </html>
     """
+
+
+@app.get("/api/settings")
+async def get_settings():
+    return SETTINGS
+
+
+class SettingsModel(BaseModel):
+    whitelist: list[str | int] | None = None
+    blacklist: list[str | int] | None = None
+    rate_threshold: int | None = None
+
+
+@app.put("/api/settings")
+async def update_settings(cfg: SettingsModel):
+    global SETTINGS
+    new_cfg = SETTINGS.copy()
+    if cfg.whitelist is not None:
+        new_cfg["whitelist"] = cfg.whitelist
+    if cfg.blacklist is not None:
+        new_cfg["blacklist"] = cfg.blacklist
+    if cfg.rate_threshold is not None:
+        new_cfg["rate_threshold"] = cfg.rate_threshold
+    SETTINGS = new_cfg
+    try:
+        save_settings(SETTINGS)
+    except Exception:
+        pass
+    return SETTINGS

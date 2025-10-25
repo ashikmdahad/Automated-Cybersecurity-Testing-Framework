@@ -4,7 +4,7 @@ import { Button, FormControlLabel, Switch, Stack } from '@mui/material';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:8000';
 
-function ScanComponent({ setResults, setReport, onScanningChange, notify, appendLog }) {
+function ScanComponent({ setResults, setFindings, setReport, onScanningChange, notify, appendLog }) {
   const [loading, setLoading] = React.useState(false);
   const [simulate, setSimulate] = React.useState(true);
 
@@ -14,6 +14,7 @@ function ScanComponent({ setResults, setReport, onScanningChange, notify, append
     try {
       const response = await axios.post(`${API_BASE}/api/scan`, { interface: 'vcan0', simulate });
       setResults(response.data.results);
+      setFindings(response.data.findings || []);
       const reportResponse = await axios.get(`${API_BASE}/api/report`);
       setReport(reportResponse.data.report);
       notify?.({ severity: 'success', message: 'Scan completed' });
@@ -41,6 +42,9 @@ function ScanComponent({ setResults, setReport, onScanningChange, notify, append
           if (msg.event === 'result' && msg.payload) {
             setResults((prev) => [...prev, msg.payload]);
             appendLog?.({ t: Date.now(), level: (msg.payload.status || 'info'), msg: `Result: ${msg.payload.type} (${msg.payload.status || ''})` });
+          } else if (msg.event === 'finding' && msg.payload) {
+            setFindings((prev) => [...prev, msg.payload]);
+            appendLog?.({ t: Date.now(), level: 'error', msg: `Finding: ${msg.payload.rule_id} (${msg.payload.severity})` });
           } else if (msg.event === 'error') {
             console.error('Stream error', msg.payload);
             notify?.({ severity: 'error', message: 'Live scan error' });

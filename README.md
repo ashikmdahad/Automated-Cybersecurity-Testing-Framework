@@ -8,12 +8,12 @@ An end-to-end, full‑stack framework for simulating and testing cybersecurity i
 - React + Material‑UI dashboard with charts, history, and export
 - SQLite logging, reporting, tests, and Dockerized local setup
 
-Use it to demo security scanning concepts, prototype detection pipelines, or build automated test rigs for IoT/automotive systems.
+Use it to demo security scanning concepts, prototype detection pipelines, or build automated test rigs for IoT/automotive systems. It now includes a first‑pass detection engine that flags basic issues like unexpected CAN IDs, successful frame injection, and simple rate anomalies.
 
 ## Architecture
 - Frontend (React + MUI): Dashboard, live scans, reporting, history, CSV/JSON export, dark mode.
 - Backend (FastAPI): REST (`/api/scan`, `/api/report`, `/api/results`), SSE (`/api/scan/stream`), WebSocket (`/api/scan/ws`).
-- Core (Python/C++): Scapy‑based sniff/inject, C++ CAN emulator (Linux), SQLite logging.
+- Core (Python/C++): Scapy‑based sniff/inject, basic detection engine (rules), C++ CAN emulator (Linux), SQLite logging.
 - CI/CD: GitLab CI job examples; CMake lists for native build.
 
 ## Quick Start
@@ -35,18 +35,26 @@ Option B — Local dev
 - Run Scan: One‑shot scan via REST; results and report update on completion.
 - Live Scan (SSE): Streams results server‑sent events in real time.
 - Live Scan (WS): Streams results over WebSocket.
+- Detection: After a scan, the backend analyzes events and returns `findings` with rule id, severity, and affected CAN ID. SSE streams `finding` events too.
 - History: View past results from SQLite, filter by status/type, clear history.
 - Export: CSV/JSON export for Results and History.
 - Dark Mode: Toggle in the header; layout remains responsive.
 
 ## Backend API
-- `POST /api/scan` body `{ "interface": "vcan0", "simulate": bool }` → returns `{ results: [...] }` and logs entries to SQLite.
+- `POST /api/scan` body `{ "interface": "vcan0", "simulate": bool }` → returns `{ results: [...], findings: [...] }` and logs entries to SQLite.
 - `GET /api/scan/stream?interface=vcan0&simulate=0|1` → SSE stream of `{ event, payload }` messages.
 - `GET /api/scan/ws?interface=vcan0&simulate=0|1` → WebSocket stream, same message contract.
 - `GET /api/report` → Markdown report based on DB contents.
 - `GET /api/results` → Raw rows from SQLite for UI/history.
 - `DELETE /api/results` → Clear stored results.
 - `GET /health` → Health probe.
+
+### Findings schema (response items)
+- `rule_id`: e.g., `UNEXPECTED_ID`, `UNEXPECTED_ID_BLACKLIST`, `INJECTION_POSSIBLE`, `RATE_ANOMALY`
+- `severity`: `high|medium|low`
+- `affected_id`: hex CAN ID where applicable
+- `description`: human‑readable summary
+- `evidence`: original triggering event (when applicable)
 
 ## Environment Variables
 - Backend

@@ -16,11 +16,14 @@ import History from './components/History';
 import SectionCard from './components/SectionCard';
 import StatCard from './components/StatCard';
 import ReportViewer from './components/ReportViewer';
+import FindingsTable from './components/FindingsTable';
 import makeTheme from './theme';
 import ActivityLog from './components/ActivityLog';
+import SettingsPanel from './components/SettingsPanel';
 
 function App() {
   const [results, setResults] = React.useState([]);
+  const [findings, setFindings] = React.useState([]);
   const [report, setReport] = React.useState('');
   const [scanning, setScanning] = React.useState(false);
   const [mode, setMode] = React.useState('light');
@@ -89,13 +92,16 @@ function App() {
                   <Dashboard scanning={scanning} />
                 </Grid>
                 <Grid item>
-                  <ScanComponent setResults={setResults} setReport={setReport} onScanningChange={setScanning} notify={notify} appendLog={appendLog} />
+                  <ScanComponent setResults={setResults} setFindings={setFindings} setReport={setReport} onScanningChange={setScanning} notify={notify} appendLog={appendLog} />
                 </Grid>
               </Grid>
             </SectionCard>
           </Grid>
           <Grid item xs={12} md={3}>
             <StatCard label="Total Events" value={results.length} color="primary.main" />
+          </Grid>
+          <Grid item xs={12} md={3}>
+            <StatCard label="Findings" value={findings.length} color="error.main" />
           </Grid>
           <Grid item xs={12} md={3}>
             <StatCard label="Detected" value={results.filter(r => (r.status||'').toLowerCase()==='detected').length} color="warning.main" />
@@ -127,6 +133,12 @@ function App() {
           </Grid>
           <Grid item xs={12}>
             <SectionCard>
+              <Typography variant="h6" sx={{ mb: 1 }}>Findings</Typography>
+              <FindingsTable findings={findings} />
+            </SectionCard>
+          </Grid>
+          <Grid item xs={12}>
+            <SectionCard>
               <Typography variant="h6" sx={{ mb: 1 }}>Report</Typography>
               <ReportViewer markdown={report} />
             </SectionCard>
@@ -140,18 +152,21 @@ function App() {
           <History />
         )}
         {view === 'settings' && (
-          <SectionCard>
-            <Typography variant="h6" sx={{ mb: 1 }}>Settings</Typography>
-            <Grid container spacing={2}>
-              <Grid item>
-                <Typography variant="body2">Table density</Typography>
+          <Grid container spacing={2}>
+            <Grid item xs={12} md={8}>
+              <SettingsPanel notify={notify} />
+            </Grid>
+            <Grid item xs={12} md={4}>
+              <SectionCard>
+                <Typography variant="h6" sx={{ mb: 1 }}>UI Preferences</Typography>
+                <Typography variant="body2" sx={{ mb: 1 }}>Table density</Typography>
                 <ButtonGroup size="small" variant="outlined">
                   <Button onClick={() => setDense(true)} disabled={dense}>Compact</Button>
                   <Button onClick={() => setDense(false)} disabled={!dense}>Comfortable</Button>
                 </ButtonGroup>
-              </Grid>
+              </SectionCard>
             </Grid>
-          </SectionCard>
+          </Grid>
         )}
       </Container>
       <Snackbar open={toast.open} autoHideDuration={3000} onClose={() => setToast({ ...toast, open: false })}>

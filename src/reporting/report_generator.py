@@ -11,9 +11,17 @@ def generate_report(db_path=None):
     conn = sqlite3.connect(db_path)
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM results")
+        # Findings summary
+        cursor.execute("SELECT timestamp, status, details FROM results WHERE test_type='finding' ORDER BY id DESC")
+        findings = cursor.fetchall()
+        if findings:
+            report.append("\n## Findings Summary\n")
+            for ts, severity, details in findings:
+                report.append(f"- [{severity.upper()}] {ts} — {details}\n")
+
+        cursor.execute("SELECT * FROM results WHERE test_type!='finding'")
         results = cursor.fetchall()
-        if not results:
+        if not results and not findings:
             report.append("No results yet. Run a scan to populate data.\n")
         else:
             for row in results:
